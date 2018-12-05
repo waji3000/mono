@@ -30,3 +30,10 @@ endif
 SUBDIRS = $(socketshandlertests)
 
 DIST_SUBDIRS = FunctionalTests UnitTests
+
+xunit-test-local: xunit-test-recursive
+
+run-xunit-test-local: run-xunit-test-recursive
+
+check: check-recursive
+
