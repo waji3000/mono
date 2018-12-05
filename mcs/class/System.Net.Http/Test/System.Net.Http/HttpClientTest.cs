@@ -366,9 +366,6 @@ namespace MonoTests.System.Net.Http
 		[Test]
 		public void Send_BaseAddress ()
 		{
-			if (HttpClientTestHelpers.IsSocketsHandler)
-				Assert.Ignore ("MARTIN FIXME");
-
 			var mh = new HttpMessageHandlerMock ();
 
 			var client = new HttpClient (mh);
@@ -720,11 +717,40 @@ namespace MonoTests.System.Net.Http
 #if FEATURE_NO_BSD_SOCKETS
 		[ExpectedException (typeof (PlatformNotSupportedException))]
 #endif
+		[Category ("SocketsHttpHandler")]
+		public void Send_Transfer_Encoding_Chunked_Needs_Content ()
+		{
+			bool? failed = null;
+
+			var port = NetworkHelpers.FindFreePort ();
+			var listener = CreateListener (l => {
+				failed = true;
+			}, port);
+
+			try {
+				try {
+					var client = new HttpClient ();
+					client.DefaultRequestHeaders.TransferEncodingChunked = true;
+					client.GetAsync ($"http://localhost:{port}/").Wait ();
+					// fails with
+					// 'Transfer-Encoding: chunked' header can not be used when content object is not specified.
+				} catch (AggregateException e) {
+					Assert.AreEqual (typeof (HttpRequestException), e.InnerException.GetType (), "#2");
+				}
+				Assert.IsNull (failed, "#102");
+			} finally {
+				listener.Abort ();
+				listener.Close ();
+			}
+		}
+
+		[Test]
+#if FEATURE_NO_BSD_SOCKETS
+		[ExpectedException (typeof (PlatformNotSupportedException))]
+#endif
+		[Category ("LegacyHttpClient")]
 		public void Send_Transfer_Encoding_Chunked ()
 		{
-			if (HttpClientTestHelpers.IsSocketsHandler)
-				Assert.Ignore ("MARTIN FIXME");
-
 			bool? failed = null;
 
 			var port = NetworkHelpers.FindFreePort ();
@@ -759,11 +785,10 @@ namespace MonoTests.System.Net.Http
 #if FEATURE_NO_BSD_SOCKETS
 		[ExpectedException (typeof (PlatformNotSupportedException))]
 #endif
+		// The SocketsHttpHandler permits custom transfer encodings.
+		[Category ("LegacyHttpClient")]
 		public void Send_Transfer_Encoding_Custom ()
 		{
-			if (HttpClientTestHelpers.IsSocketsHandler)
-				Assert.Ignore ("MARTIN FIXME");
-
 			bool? failed = null;
 
 			var port = NetworkHelpers.FindFreePort ();
@@ -892,9 +917,6 @@ namespace MonoTests.System.Net.Http
 #endif
 		public void Send_Complete_NoContent_Put ()
 		{
-			if (HttpClientTestHelpers.IsSocketsHandler)
-				Assert.Ignore ("MARTIN FIXME");
-
 			Send_Complete_NoContent (HttpMethod.Put);
 		}
 
@@ -909,18 +931,20 @@ namespace MonoTests.System.Net.Http
 
 		void Send_Complete_NoContent (HttpMethod method)
 		{
-			if (HttpClientTestHelpers.IsSocketsHandler)
-				Assert.Ignore ("MARTIN FIXME");
-
 			bool? failed = null;
 			var port = NetworkHelpers.FindFreePort ();
 			var listener = CreateListener (l => {
 				try {
 					var request = l.Request;
 
-					Assert.AreEqual (3, request.Headers.Count, "#1");
+					if (HttpClientTestHelpers.IsSocketsHandler) {
+						Assert.AreEqual (2, request.Headers.Count, "#1");
+						Assert.IsNull (request.Headers["Connection"], "#1c");
+					} else {
+						Assert.AreEqual (3, request.Headers.Count, "#1");
+						Assert.AreEqual ("keep-alive", request.Headers["Connection"], "#1c");
+					}
 					Assert.AreEqual ("0", request.Headers ["Content-Length"], "#1b");
-					Assert.AreEqual ("keep-alive", request.Headers ["Connection"], "#1c");
 					Assert.AreEqual (method.Method, request.HttpMethod, "#2");
 					failed = false;
 				} catch (Exception ex){
@@ -1054,14 +1078,14 @@ namespace MonoTests.System.Net.Http
 #endif
 		public void Send_Content_Put_CustomStream ()
 		{
-			if (HttpClientTestHelpers.IsSocketsHandler)
-				Assert.Ignore ("MARTIN FIXME");
-
 			bool passed = false;
 			var port = NetworkHelpers.FindFreePort ();
 			var listener = CreateListener (l => {
 				var request = l.Request;
-				passed = 44 == request.ContentLength64;
+				if (HttpClientTestHelpers.IsSocketsHandler)
+					passed = -1 == request.ContentLength64;
+				else
+					passed = 44 == request.ContentLength64;
 				passed &= request.ContentType == null;
 			}, port);
 

@@ -14,8 +14,6 @@ the_assembly = $(topdir)/class/lib/$(PROFILE_DIRECTORY)/System.Net.Http.dll
 
 include ../../../build/tests.make
 
-DOTNET_URI = 1
-
 clean-local:
 	-rm -f $(tests_CLEAN_FILES) $(CLEAN_FILES)
 

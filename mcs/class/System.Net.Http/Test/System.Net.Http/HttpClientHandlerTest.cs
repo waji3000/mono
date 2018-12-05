@@ -139,17 +139,18 @@ namespace MonoTests.System.Net.Http
 #endif
 		public void Disposed ()
 		{
-			if (HttpClientTestHelpers.IsSocketsHandler)
-				Assert.Ignore ("MARTIN FIXME");
-
 			var h = new HttpClientHandler ();
 			h.Dispose ();
 			var c = new HttpClient (h);
 			try {
 				c.GetAsync ("http://google.com").Wait ();
 				Assert.Fail ("#1");
+#if LEGACY_HTTPCLIENT
 			} catch (AggregateException e) {
 				Assert.IsTrue (e.InnerException is ObjectDisposedException, "#2");
+#else
+			} catch (ObjectDisposedException) {
+#endif
 			}
 		}
 	}

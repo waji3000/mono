@@ -19,17 +19,21 @@ LIBRARY_WARN_AS_ERROR = yes
 EXTRA_DISTFILES = \
 	TestData/testservereku.contoso.com.pfx
 
-include ../../build/library.make
-
 ifdef SOCKETSHTTPHANDLER
+DOTNET_URI = 1
 socketshandlertests = FunctionalTests UnitTests
+PROFILE_TEST_HARNESS_EXCLUDES = LegacyHttpClient,
 else
 socketshandlertests =
+TEST_MCS_FLAGS += -d:LEGACY_HTTPCLIENT
+PROFILE_TEST_HARNESS_EXCLUDES = SocketsHttpHandler,
 endif
 
 SUBDIRS = $(socketshandlertests)
 
 DIST_SUBDIRS = FunctionalTests UnitTests
+
+include ../../build/library.make
 
 xunit-test-local: xunit-test-recursive
 

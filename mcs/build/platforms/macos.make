@@ -36,4 +36,3 @@ platform-check:
 #	fi
 
 PLATFORM_MACOS=1
-SOCKETSHTTPHANDLER=1

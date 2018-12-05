@@ -6,15 +6,10 @@ namespace MonoTests.System.Net.Http
 {
 	static class HttpClientTestHelpers
 	{
-		internal static bool IsSocketsHandler {
-			get;
-		}
-
-		static HttpClientTestHelpers ()
-		{
-			var asm = typeof (HttpClient).Assembly;
-			var type = asm.GetType ("System.Net.Http.SocketsHttpHandler", false);
-			IsSocketsHandler = type != null;
-		}
+#if LEGACY_HTTPCLIENT
+		internal static bool IsSocketsHandler => false;
+#else
+		internal static bool IsSocketsHandler => true;
+#endif
 	}
 }

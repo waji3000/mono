@@ -53,12 +53,17 @@ namespace MonoTests.System.Net.Http.Headers
 		[Test]
 		public void Add ()
 		{
-			if (HttpClientTestHelpers.IsSocketsHandler)
-				Assert.Ignore ("MARTIN FIXME");
+			headers.Add ("aa", "value");
+			headers.Add ("aa", "value");
 
-			headers.Add ("aa", "value");
-			headers.Add ("aa", "value");
-			headers.Add ("Expires", (string) null);
+			try {
+				headers.Add ("Expires", (string)null);
+				if (HttpClientTestHelpers.IsSocketsHandler)
+					Assert.Fail ("#1");
+			} catch (FormatException) {
+				if (!HttpClientTestHelpers.IsSocketsHandler)
+					throw;
+			}
 		}
 
 		[Test]
