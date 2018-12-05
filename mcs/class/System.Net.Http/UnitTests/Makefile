@@ -1,4 +1,4 @@
-thisdir = class/System.Net.Http.SocketsHttpHandler/UnitTests
+thisdir = class/System.Net.Http/UnitTests
 SUBDIRS = 
 include ../../../build/rules.make
 

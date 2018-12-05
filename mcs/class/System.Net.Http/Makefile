@@ -1,5 +1,5 @@
 thisdir = class/System.Net.Http
-SUBDIRS = 
+
 include ../../build/rules.make
 
 LIBRARY = System.Net.Http.dll
@@ -16,4 +16,17 @@ TEST_MCS_FLAGS =
 
 LIBRARY_WARN_AS_ERROR = yes
 
+EXTRA_DISTFILES = \
+	TestData/testservereku.contoso.com.pfx
+
 include ../../build/library.make
+
+ifdef SOCKETSHTTPHANDLER
+socketshandlertests = FunctionalTests UnitTests
+else
+socketshandlertests =
+endif
+
+SUBDIRS = $(socketshandlertests)
+
+DIST_SUBDIRS = FunctionalTests UnitTests

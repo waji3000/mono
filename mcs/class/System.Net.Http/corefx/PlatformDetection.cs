@@ -11,6 +11,7 @@ namespace System
 		public static bool IsMono => true;
 
 		public static bool SupportsX509Chain => UsingBtls;
+		public static bool SupportsCertRevocation => !UsingBtls;
 		public static bool UsingBtls => string.Equals (Environment.GetEnvironmentVariable ("MONO_TLS_PROVIDER"), "btls");
 	}
 }

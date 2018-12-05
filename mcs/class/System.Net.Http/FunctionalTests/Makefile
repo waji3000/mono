@@ -1,4 +1,4 @@
-thisdir = class/System.Net.Http.SocketsHttpHandler/FunctionalTests
+thisdir = class/System.Net.Http/FunctionalTests
 SUBDIRS = 
 include ../../../build/rules.make
 
@@ -10,7 +10,7 @@ DOTNET_URI = 1
 
 XTEST_LIB_FLAGS = /resource:../TestData/testservereku.contoso.com.pfx
 
-the_assembly = $(topdir)/class/lib/$(PROFILE_DIRECTORY)/System.Net.Http.SocketsHttpHandler.dll
+the_assembly = $(topdir)/class/lib/$(PROFILE_DIRECTORY)/System.Net.Http.dll
 
 include ../../../build/tests.make
 

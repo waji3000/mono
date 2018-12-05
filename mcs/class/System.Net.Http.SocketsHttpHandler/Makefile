@@ -1,5 +1,12 @@
 thisdir = class/System.Net.Http.SocketsHttpHandler
-SUBDIRS = FunctionalTests UnitTests
+
+if SOCKETSHTTPHANDLER
+socketshandlertests = FunctionalTests UnitTests
+else
+socketshandlertests =
+endif
+
+SUBDIRS = $(socketshandlertests)
 include ../../build/rules.make
 
 LIBRARY = System.Net.Http.SocketsHttpHandler.dll
