@@ -11,5 +11,19 @@ namespace MonoTests.System.Net.Http
 #else
 		internal static bool IsSocketsHandler => true;
 #endif
+
+		internal static HttpClient CreateHttpClient ()
+		{
+			return new HttpClient (CreateHttpClientHandler ());
+		}
+
+		internal static HttpClientHandler CreateHttpClientHandler ()
+		{
+#if WEBREQUEST_HANDLER
+			return new WebRequestHandler ();
+#else
+			return new HttpClientHandler ();
+#endif
+		}
 	}
 }

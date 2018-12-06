@@ -95,7 +95,7 @@ namespace MonoTests.System.Net.Http
 		[Test]
 		public void Ctor_RelativeUri ()
 		{
-			var client = new HttpClient ();
+			var client = HttpClientTestHelpers.CreateHttpClient ();
 			client.BaseAddress = new Uri ("http://en.wikipedia.org/wiki/");
 			var uri = new Uri ("Computer", UriKind.Relative);
 			var req = new HttpRequestMessage (HttpMethod.Get, uri);
@@ -120,7 +120,7 @@ namespace MonoTests.System.Net.Http
 		[Test]
 		public void Ctor_RelativeUriString ()
 		{
-			var client = new HttpClient ();
+			var client = HttpClientTestHelpers.CreateHttpClient ();
 			client.BaseAddress = new Uri ("http://en.wikipedia.org/wiki/");
 			var req = new HttpRequestMessage (HttpMethod.Get, "Computer");
 			// HttpRequestMessage does not rewrite it here.

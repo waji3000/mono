@@ -66,7 +66,7 @@ namespace MonoTests.System.Net.Http
 #endif
 		public void Properties_Defaults ()
 		{
-			var h = new HttpClientHandler ();
+			var h = HttpClientTestHelpers.CreateHttpClientHandler ();
 			Assert.IsTrue (h.AllowAutoRedirect, "#1");
 			Assert.AreEqual (DecompressionMethods.None, h.AutomaticDecompression, "#2");
 			Assert.AreEqual (0, h.CookieContainer.Count, "#3");
@@ -94,7 +94,7 @@ namespace MonoTests.System.Net.Http
 #endif
 		public void Properties_Invalid ()
 		{
-			var h = new HttpClientHandler ();
+			var h = HttpClientTestHelpers.CreateHttpClientHandler ();
 			try {
 				h.MaxAutomaticRedirections = 0;
 				Assert.Fail ("#1");
@@ -124,7 +124,7 @@ namespace MonoTests.System.Net.Http
 #endif
 		public void Properties_AfterClientCreation ()
 		{
-			var h = new HttpClientHandler ();
+			var h = HttpClientTestHelpers.CreateHttpClientHandler ();
 			h.AllowAutoRedirect = true;
 
 			// We may modify properties after creating the HttpClient.
@@ -139,7 +139,7 @@ namespace MonoTests.System.Net.Http
 #endif
 		public void Disposed ()
 		{
-			var h = new HttpClientHandler ();
+			var h = HttpClientTestHelpers.CreateHttpClientHandler ();
 			h.Dispose ();
 			var c = new HttpClient (h);
 			try {
