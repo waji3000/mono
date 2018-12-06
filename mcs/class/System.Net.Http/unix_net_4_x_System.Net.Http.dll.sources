@@ -1,6 +1,7 @@
 Assembly/AssemblyInfo.cs
 
 HttpClientHandler.Mono.cs
+IMonoHttpClientHandler.cs
 
 ../corlib/System.Diagnostics/Debug.cs
 
