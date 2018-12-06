@@ -145,12 +145,11 @@ namespace MonoTests.System.Net.Http
 			try {
 				c.GetAsync ("http://google.com").Wait ();
 				Assert.Fail ("#1");
-#if LEGACY_HTTPCLIENT
 			} catch (AggregateException e) {
 				Assert.IsTrue (e.InnerException is ObjectDisposedException, "#2");
-#else
+				Assert.IsFalse (HttpClientTestHelpers.IsSocketsHandler, "#3");
 			} catch (ObjectDisposedException) {
-#endif
+				Assert.IsTrue (HttpClientTestHelpers.IsSocketsHandler, "#4");
 			}
 		}
 	}
