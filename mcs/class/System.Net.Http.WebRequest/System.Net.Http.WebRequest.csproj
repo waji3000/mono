@@ -68,6 +68,7 @@
   <ItemGroup>
     <ProjectReference Include="../System.Net.Http/System.Net.Http.csproj" />
     <ProjectReference Include="../System/System.csproj" />
+    <ProjectReference Include="../System.Core/System.Core.csproj" />
     <ProjectReference Include="../corlib/corlib.csproj" />
   </ItemGroup>
   <!-- @ALL_REFERENCES@ -->
