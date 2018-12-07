@@ -61,6 +61,10 @@ namespace System.Net.Http
 			get; set;
 		}
 
+		long MaxRequestContentBufferSize {
+			get; set;
+		}
+
 		bool PreAuthenticate {
 			get; set;
 		}

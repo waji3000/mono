@@ -275,7 +275,7 @@ namespace MonoTests.System.Net.Http
 					Assert.AreEqual ("v1", values[0]);
 					break;
 				case 1:
-					if (HttpClientTestHelpers.IsSocketsHandler)
+					if (HttpClientTestHelpers.UsingSocketsHandler)
 						Assert.AreEqual ("Cache-Control", entry.Key);
 					else
 						Assert.AreEqual ("cache-control", entry.Key);

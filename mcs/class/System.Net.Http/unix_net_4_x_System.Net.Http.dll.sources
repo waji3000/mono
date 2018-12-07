@@ -1,7 +1,9 @@
 Assembly/AssemblyInfo.cs
 
+HeaderUtils.SocketsHandler.cs
 HttpClientHandler.Mono.cs
 IMonoHttpClientHandler.cs
+MonoWebRequestHandler.cs
 
 ../corlib/System.Diagnostics/Debug.cs
 

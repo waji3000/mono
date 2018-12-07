@@ -626,7 +626,7 @@ namespace MonoTests.System.Net.Http
 				Assert.AreEqual ("w3.org", response.Headers.Location.OriginalString, "#107");
 
 				Assert.AreEqual ("test description", response.ReasonPhrase, "#110");
-				if (HttpClientTestHelpers.IsSocketsHandler)
+				if (HttpClientTestHelpers.UsingSocketsHandler)
 					Assert.AreEqual (HttpVersion.Version10, response.Version, "#111");
 				else
 					Assert.AreEqual (HttpVersion.Version11, response.Version, "#111");
@@ -935,7 +935,7 @@ namespace MonoTests.System.Net.Http
 				try {
 					var request = l.Request;
 
-					if (HttpClientTestHelpers.IsSocketsHandler) {
+					if (HttpClientTestHelpers.UsingSocketsHandler) {
 						Assert.AreEqual (2, request.Headers.Count, "#1");
 						Assert.IsNull (request.Headers["Connection"], "#1c");
 					} else {
@@ -1080,7 +1080,7 @@ namespace MonoTests.System.Net.Http
 			var port = NetworkHelpers.FindFreePort ();
 			var listener = CreateListener (l => {
 				var request = l.Request;
-				if (HttpClientTestHelpers.IsSocketsHandler)
+				if (HttpClientTestHelpers.UsingSocketsHandler)
 					passed = -1 == request.ContentLength64;
 				else
 					passed = 44 == request.ContentLength64;
@@ -1487,7 +1487,7 @@ namespace MonoTests.System.Net.Http
 		// https://github.com/mono/mono/issues/7355
 		public void WildcardConnect ()
 		{
-			if (HttpClientTestHelpers.IsSocketsHandler)
+			if (HttpClientTestHelpers.UsingSocketsHandler)
 				Assert.Ignore ("Throws System.NullReferenceException");
 
 			try {

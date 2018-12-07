@@ -26,6 +26,7 @@ PROFILE_TEST_HARNESS_EXCLUDES = LegacyHttpClient,
 else
 socketshandlertests =
 TEST_MCS_FLAGS += -d:LEGACY_HTTPCLIENT
+LIB_MCS_FLAGS += -d:LEGACY_HTTPCLIENT
 PROFILE_TEST_HARNESS_EXCLUDES = SocketsHttpHandler,
 endif
 

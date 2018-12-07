@@ -58,10 +58,10 @@ namespace MonoTests.System.Net.Http.Headers
 
 			try {
 				headers.Add ("Expires", (string)null);
-				if (HttpClientTestHelpers.IsSocketsHandler)
+				if (HttpClientTestHelpers.UsingSocketsHandler)
 					Assert.Fail ("#1");
 			} catch (FormatException) {
-				if (!HttpClientTestHelpers.IsSocketsHandler)
+				if (!HttpClientTestHelpers.UsingSocketsHandler)
 					throw;
 			}
 		}

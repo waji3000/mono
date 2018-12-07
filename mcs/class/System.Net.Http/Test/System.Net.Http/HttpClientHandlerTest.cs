@@ -73,7 +73,7 @@ namespace MonoTests.System.Net.Http
 			Assert.AreEqual (4096, h.CookieContainer.MaxCookieSize, "#3b");
 			Assert.AreEqual (null, h.Credentials, "#4");
 			Assert.AreEqual (50, h.MaxAutomaticRedirections, "#5");
-			if (HttpClientTestHelpers.IsSocketsHandler)
+			if (HttpClientTestHelpers.UsingSocketsHandler)
 				Assert.AreEqual (0, h.MaxRequestContentBufferSize, "#6");
 			else
 				Assert.AreEqual (int.MaxValue, h.MaxRequestContentBufferSize, "#6");
@@ -107,7 +107,7 @@ namespace MonoTests.System.Net.Http
 			} catch (ArgumentOutOfRangeException) {
 			}
 
-			if (HttpClientTestHelpers.IsSocketsHandler)
+			if (HttpClientTestHelpers.UsingSocketsHandler)
 				Assert.Ignore ();
 
 			h.UseProxy = false;
@@ -147,9 +147,9 @@ namespace MonoTests.System.Net.Http
 				Assert.Fail ("#1");
 			} catch (AggregateException e) {
 				Assert.IsTrue (e.InnerException is ObjectDisposedException, "#2");
-				Assert.IsFalse (HttpClientTestHelpers.IsSocketsHandler, "#3");
+				Assert.IsFalse (HttpClientTestHelpers.IsSocketsHandler (h), "#3");
 			} catch (ObjectDisposedException) {
-				Assert.IsTrue (HttpClientTestHelpers.IsSocketsHandler, "#4");
+				Assert.IsTrue (HttpClientTestHelpers.IsSocketsHandler (h), "#4");
 			}
 		}
 	}
