@@ -6,6 +6,51 @@ using Mono.Cecil;
 using Mono.Options;
 using Mono.Cecil.Cil;
 
+//
+// Google V8 style options:
+// - bool: --foo/--no-foo
+//
+
+enum FlagType {
+	BoolFlag,
+}
+
+// 'Option' is already used by Mono.Options
+class Flag {
+	public Flag (string name, string desc, FlagType type) {
+		Name = name;
+		FlagType = type;
+		Description = desc;
+	}
+
+	public string Name {
+		get; set;
+	}
+
+	public FlagType FlagType {
+		get; set;
+	}
+
+	public string Description {
+		get; set;
+	}
+}
+
+class BoolFlag : Flag {
+	public BoolFlag (string name, string description, bool def_value, Action<bool> action) : base (name, description, FlagType.BoolFlag) {
+		Setter = action;
+		DefaultValue = def_value;
+	}
+
+	public Action<bool> Setter {
+		get; set;
+	}
+
+	public bool DefaultValue {
+		get; set;
+	}
+}
+
 class Driver {
 	static bool enable_debug, enable_linker;
 	static string app_prefix, framework_prefix, bcl_prefix, bcl_tools_prefix, bcl_facades_prefix, out_prefix;
@@ -31,6 +76,8 @@ class Driver {
 		public string linkin_path;
 		// Linker output path
 		public string linkout_path;
+		// Whenever to AOT this assembly
+		public bool aot;
 	}
 
 	static List<AssemblyData> assemblies = new List<AssemblyData> ();
@@ -42,14 +89,23 @@ class Driver {
 		None,
 	}
 
+	void AddFlag (OptionSet options, Flag flag) {
+		if (flag is BoolFlag) {
+			options.Add (flag.Name, s => (flag as BoolFlag).Setter (true));
+			options.Add ("no-" + flag.Name, s => (flag as BoolFlag).Setter (false));
+		}
+		option_list.Add (flag);
+	}
+
+	static List<Flag> option_list = new List<Flag> ();
+
 	static void Usage () {
 		Console.WriteLine ("Usage: packager.exe <options> <assemblies>");
 		Console.WriteLine ("Valid options:");
 		Console.WriteLine ("\t--help          Show this help message");
-		Console.WriteLine ("\t--debug         Enable Debugging (default false)");
 		Console.WriteLine ("\t--debugrt       Use the debug runtime (default release) - this has nothing to do with C# debugging");
-		Console.WriteLine ("\t--nobinding     Disable binding engine (default include engine)");
 		Console.WriteLine ("\t--aot           Enable AOT mode");
+		Console.WriteLine ("\t--aot-interp    Enable AOT+INTERP mode");
 		Console.WriteLine ("\t--prefix=x      Set the input assembly prefix to 'x' (default to the current directory)");
 		Console.WriteLine ("\t--out=x         Set the output directory to 'x' (default to the current directory)");
 		Console.WriteLine ("\t--mono-sdkdir=x Set the mono sdk directory to 'x'");
@@ -62,8 +118,20 @@ class Driver {
 		Console.WriteLine ("\t\t              'always' overwrites the file if it exists.");
 		Console.WriteLine ("\t\t              'ifnewer' copies or overwrites the file if modified or size is different.");
 		Console.WriteLine ("\t--profile=x     Enable the 'x' mono profiler.");
+		Console.WriteLine ("\t--aot-assemblies=x List of assemblies to AOT in AOT+INTERP mode.");
 
 		Console.WriteLine ("foo.dll         Include foo.dll as one of the root assemblies");
+		Console.WriteLine ();
+
+		Console.WriteLine ("Additional options (--option/--no-option):");
+		foreach (var flag in option_list) {
+			if (flag is BoolFlag) {
+				Console.WriteLine ("  --" + flag.Name + " (" + flag.Description + ")");
+				Console.WriteLine ("        type: bool  default: " + ((flag as BoolFlag).DefaultValue ? "true" : "false"));
+			}
+		}
+
+
 	}
 
 	static void Debug (string s) {
@@ -176,10 +244,11 @@ class Driver {
 		}
 	}
 
-	void GenDriver (string builddir, List<string> profilers) {
+	void GenDriver (string builddir, List<string> profilers, ExecMode ee_mode) {
 		var symbols = new List<string> ();
 		foreach (var adata in assemblies) {
-			symbols.Add (String.Format ("mono_aot_module_{0}_info", adata.name.Replace ('.', '_').Replace ('-', '_')));
+			if (adata.aot)
+				symbols.Add (String.Format ("mono_aot_module_{0}_info", adata.name.Replace ('.', '_').Replace ('-', '_')));
 		}
 
 		var w = File.CreateText (Path.Combine (builddir, "driver-gen.c.in"));
@@ -199,11 +268,22 @@ class Driver {
 			w.WriteLine ("EMSCRIPTEN_KEEPALIVE void mono_wasm_load_profiler_" + profiler + " (const char *desc) { mono_profiler_init_" + profiler + " (desc); }");
 		}
 
+		switch (ee_mode) {
+		case ExecMode.AotInterp:
+			w.WriteLine ("#define EE_MODE_LLVMONLY_INTERP 1");
+			break;
+		case ExecMode.Aot:
+			w.WriteLine ("#define EE_MODE_LLVMONLY 1");
+			break;
+		default:
+			break;
+		}
+
 		w.Close ();
 	}
 
-	public static void Main (string[] args) {
-		new Driver ().Run (args);
+	public static int Main (string[] args) {
+		return new Driver ().Run (args);
 	}
 
 	enum CopyType
@@ -213,13 +293,27 @@ class Driver {
 		IfNewer		
 	}
 
-	void Run (string[] args) {
+	enum ExecMode {
+		Interp = 1,
+		Aot = 2,
+		AotInterp = 3
+	}
+
+	class WasmOptions {
+		public bool Debug;
+		public bool DebugRuntime;
+		public bool AddBinding;
+		public bool Linker;
+	}
+
+	int Run (string[] args) {
 		var add_binding = true;
 		var root_assemblies = new List<string> ();
 		enable_debug = false;
 		string builddir = null;
 		string sdkdir = null;
 		string emscripten_sdkdir = null;
+		var aot_assemblies = "";
 		out_prefix = Environment.CurrentDirectory;
 		app_prefix = Environment.CurrentDirectory;
 		var deploy_prefix = "managed";
@@ -234,11 +328,17 @@ class Driver {
 		var profilers = new List<string> ();
 		var copyTypeParm = "default";
 		var copyType = CopyType.Default;
+		var ee_mode = ExecMode.Interp;
+
+		var opts = new WasmOptions () {
+				AddBinding = true,
+				Debug = false,
+				DebugRuntime = false,
+				Linker = false,
+			};
 
 		var p = new OptionSet () {
-				{ "debug", s => enable_debug = true },
-				{ "nobinding", s => add_binding = false },
-				{ "debugrt", s => use_release_runtime = false },
+				{ "nobinding", s => opts.AddBinding = false },
 				{ "out=", s => out_prefix = s },
 				{ "appdir=", s => out_prefix = s },
 				{ "builddir=", s => builddir = s },
@@ -247,14 +347,21 @@ class Driver {
 				{ "prefix=", s => app_prefix = s },
 				{ "deploy=", s => deploy_prefix = s },
 				{ "vfs=", s => vfs_prefix = s },
-				{ "aot", s => enable_aot = true },
+				{ "aot", s => ee_mode = ExecMode.Aot },
+				{ "aot-interp", s => ee_mode = ExecMode.AotInterp },
 				{ "template=", s => runtimeTemplate = s },
 				{ "asset=", s => assets.Add(s) },
 				{ "search-path=", s => root_search_paths.Add(s) },
 				{ "profile=", s => profilers.Add (s) },
 				{ "copy=", s => copyTypeParm = s },
+				{ "aot-assemblies=", s => aot_assemblies = s },
 				{ "help", s => print_usage = true },
 					};
+
+		AddFlag (p, new BoolFlag ("debug", "enable c# debugging", opts.Debug, b => opts.Debug = b));
+		AddFlag (p, new BoolFlag ("debugrt", "enable debug runtime", opts.DebugRuntime, b => opts.DebugRuntime = b));
+		AddFlag (p, new BoolFlag ("linker", "enable the linker", opts.Linker, b => opts.Linker = b));
+		AddFlag (p, new BoolFlag ("binding", "enable the binding engine", opts.AddBinding, b => opts.AddBinding = b));
 
 		var new_args = p.Parse (args).ToArray ();
 		foreach (var a in new_args) {
@@ -263,27 +370,42 @@ class Driver {
 
 		if (print_usage) {
 			Usage ();
-			return;
+			return 0;
 		}
 
 		if (!Enum.TryParse(copyTypeParm, true, out copyType)) {
 			Console.WriteLine("Invalid copy value");
 			Usage ();
-			return;
+			return 1;
 		}
+
+		enable_debug = opts.Debug;
+		enable_linker = opts.Linker;
+		add_binding = opts.AddBinding;
+		use_release_runtime = !opts.DebugRuntime;
+
+		if (ee_mode == ExecMode.Aot || ee_mode == ExecMode.AotInterp)
+			enable_aot = true;
 
 		if (enable_aot)
 			enable_linker = true;
+
+		if (aot_assemblies != "") {
+			if (ee_mode != ExecMode.AotInterp) {
+				Console.Error.WriteLine ("The --aot-assemblies= argument requires --aot-interp.");
+				return 1;
+			}
+		}
 
 		var tool_prefix = Path.GetDirectoryName (typeof (Driver).Assembly.Location);
 
 		//are we working from the tree?
 		if (sdkdir != null) {
-			framework_prefix = tool_prefix; //all framework assemblies are currently side built to packager.exe
+			framework_prefix = Path.Combine (tool_prefix, "framework"); //all framework assemblies are currently side built to packager.exe
 			bcl_prefix = Path.Combine (sdkdir, "wasm-bcl/wasm");
 			bcl_tools_prefix = Path.Combine (sdkdir, "wasm-bcl/wasm_tools");
 		} else if (Directory.Exists (Path.Combine (tool_prefix, "../out/wasm-bcl/wasm"))) {
-			framework_prefix = tool_prefix; //all framework assemblies are currently side built to packager.exe
+			framework_prefix = Path.Combine (tool_prefix, "framework"); //all framework assemblies are currently side built to packager.exe
 			bcl_prefix = Path.Combine (tool_prefix, "../out/wasm-bcl/wasm");
 			bcl_tools_prefix = Path.Combine (tool_prefix, "../out/wasm-bcl/wasm_tools");
 			sdkdir = Path.Combine (tool_prefix, "../out");
@@ -304,6 +426,25 @@ class Driver {
 			var bindings = ResolveFramework (BINDINGS_ASM_NAME + ".dll");
 			Import (bindings, AssemblyKind.Framework);
 			root_assemblies.Add (bindings);
+		}
+
+		if (enable_aot) {
+			var to_aot = new Dictionary<string, bool> ();
+			to_aot ["mscorlib"] = true;
+			if (aot_assemblies != "") {
+				foreach (var s in aot_assemblies.Split (','))
+					to_aot [s] = true;
+			}
+			foreach (var ass in assemblies) {
+				if (aot_assemblies == "" || to_aot.ContainsKey (ass.name)) {
+					ass.aot = true;
+					to_aot.Remove (ass.name);
+				}
+			}
+			if (to_aot.Count > 0) {
+				Console.Error.WriteLine ("Unknown assembly name '" + to_aot.Keys.ToArray ()[0] + "' in --aot-assemblies option.");
+				return 1;
+			}
 		}
 
 		if (builddir != null) {
@@ -361,7 +502,8 @@ class Driver {
 					filename = "aot-dummy.dll",
 					bc_path = "$builddir/aot-dummy.dll.bc",
 					app_path = "$appdir/$deploy_prefix/aot-dummy.dll",
-					linkout_path = "$builddir/linker-out/aot-dummy.dll"
+					linkout_path = "$builddir/linker-out/aot-dummy.dll",
+					aot = true
 					};
 			assemblies.Add (dedup_asm);
 			file_list.Add ("aot-dummy.dll");
@@ -388,27 +530,31 @@ class Driver {
 					   Path.Combine (runtime_dir, "mono.wasm"),
 					   Path.Combine (out_prefix, "mono.wasm"));
 
-			foreach(var asset in assets)
-			{
+			foreach(var asset in assets) {
 				CopyFile (asset, 
 						Path.Combine (out_prefix, Path.GetFileName (asset)), copyType, "Asset: ");
 			}
 		}
 
 		if (!emit_ninja)
-			return;
+			return 0;
 
 		if (enable_aot) {
 			if (sdkdir == null) {
 				Console.WriteLine ("The --mono-sdkdir argument is required when using AOT.");
-				Environment.Exit (1);
+				return 1;
 			}
 			if (emscripten_sdkdir == null) {
 				Console.WriteLine ("The --emscripten-sdkdir argument is required when using AOT.");
-				Environment.Exit (1);
+				return 1;
 			}
-			GenDriver (builddir, profilers);
+			GenDriver (builddir, profilers, ee_mode);
 		}
+
+		string runtime_libs = "$mono_sdkdir/wasm-runtime-release/lib/libmonosgen-2.0.a";
+		if (ee_mode == ExecMode.AotInterp)
+			// FIXME: We need to link the icall table because the interpreter uses it to lookup icalls even if the aot-ed icall wrappers are available
+			runtime_libs += " $mono_sdkdir/wasm-runtime-release/lib/libmono-ee-interp.a $mono_sdkdir/wasm-runtime-release/lib/libmono-ilgen.a $mono_sdkdir/wasm-runtime-release/lib/libmono-icall-table.a";
 
 		string profiler_libs = "";
 		string profiler_aot_args = "";
@@ -442,10 +588,10 @@ class Driver {
 
 		// Rules
 		ninja.WriteLine ("rule aot");
-		ninja.WriteLine ($"  command = MONO_PATH=$mono_path $cross --debug {profiler_aot_args} --aot=$aot_args,llvmonly,asmonly,no-opt,static,direct-icalls,llvm-outfile=$outfile $src_file");
+		ninja.WriteLine ($"  command = MONO_PATH=$mono_path $cross --debug {profiler_aot_args} --aot=$aot_args,llvmonly,interp,asmonly,no-opt,static,direct-icalls,llvm-outfile=$outfile $src_file");
 		ninja.WriteLine ("  description = [AOT] $src_file -> $outfile");
 		ninja.WriteLine ("rule aot-instances");
-		ninja.WriteLine ($"  command = MONO_PATH=$mono_path $cross --debug {profiler_aot_args} --aot=llvmonly,asmonly,no-opt,static,direct-icalls,llvm-outfile=$outfile,dedup-include=$dedup_image $src_files");
+		ninja.WriteLine ($"  command = MONO_PATH=$mono_path $cross --debug {profiler_aot_args} --aot=llvmonly,asmonly,interp,no-opt,static,direct-icalls,llvm-outfile=$outfile,dedup-include=$dedup_image $src_files");
 		ninja.WriteLine ("  description = [AOT-INSTANCES] $outfile");
 		ninja.WriteLine ("rule mkdir");
 		ninja.WriteLine ("  command = mkdir -p $out");
@@ -460,9 +606,10 @@ class Driver {
 		ninja.WriteLine ("  command = bash -c '$emcc $emcc_flags -o $out --js-library $tool_prefix/library_mono.js --js-library $tool_prefix/binding_support.js --js-library $tool_prefix/dotnet_support.js $in'");
 		ninja.WriteLine ("  description = [EMCC-LINK] $in -> $out");
 		ninja.WriteLine ("rule linker");
-
 		ninja.WriteLine ("  command = mono $tools_dir/monolinker.exe -out $builddir/linker-out -l none --exclude-feature com --exclude-feature remoting --exclude-feature etw $linker_args || exit 1; for f in $out; do if test ! -f $$f; then echo > empty.cs; csc /out:$$f /target:library empty.cs; fi; done");
 		ninja.WriteLine ("  description = [IL-LINK]");
+		ninja.WriteLine ("rule aot-dummy");
+		ninja.WriteLine ("  command = echo > aot-dummy.cs; csc /out:$out /target:library aot-dummy.cs");
 
 		// Targets
 		ninja.WriteLine ("build $appdir: mkdir");
@@ -514,7 +661,7 @@ class Driver {
 			}
 			ninja.WriteLine ($"build $appdir/$deploy_prefix/{filename}: cpifdiff {infile}");
 
-			if (enable_aot) {
+			if (a.aot) {
 				a.bc_path = $"$builddir/{filename}.bc";
 
 				ninja.WriteLine ($"build {a.bc_path}: aot {infile}");
@@ -544,11 +691,11 @@ class Driver {
 			ninja.WriteLine ($"  outfile={a.bc_path}");
 			ninja.WriteLine ($"  mono_path={aot_in_path}");
 			ninja.WriteLine ($"build {a.app_path}: cpifdiff {a.linkout_path}");
+			ninja.WriteLine ($"build {a.linkout_path}: aot-dummy");
 			ofiles += $" {a.bc_path}";
-			linker_ofiles += $" {a.linkout_path}";
 		}
 		if (enable_aot) {
-			ninja.WriteLine ($"build $appdir/mono.js: emcc-link $builddir/driver.o {ofiles} {profiler_libs} $mono_sdkdir/wasm-runtime-release/lib/libmonosgen-2.0.a | $tool_prefix/library_mono.js $tool_prefix/binding_support.js $tool_prefix/dotnet_support.js");
+			ninja.WriteLine ($"build $appdir/mono.js: emcc-link $builddir/driver.o {ofiles} {profiler_libs} {runtime_libs} $mono_sdkdir/wasm-runtime-release/lib/libmono-native.a | $tool_prefix/library_mono.js $tool_prefix/binding_support.js $tool_prefix/dotnet_support.js");
 		}
 		if (enable_linker) {
 			string linker_args = "";
@@ -572,6 +719,8 @@ class Driver {
 		}
 
 		ninja.Close ();
+
+		return 0;
 	}
 
 	static void CopyFile(string sourceFileName, string destFileName, CopyType copyType, string typeFile = "")

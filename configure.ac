@@ -48,7 +48,7 @@ MONO_VERSION_BUILD=`echo $VERSION | cut -d . -f 3`
 # There is no ordering of corlib versions, no old or new,
 # the runtime expects an exact match.
 #
-MONO_CORLIB_VERSION=0F48A001-A1AA-464B-8CA4-7C23325CA358
+MONO_CORLIB_VERSION=e686c1dd-3c2a-4dc9-b12e-ff0d524d6e6b
 
 #
 # Put a quoted #define in config.h.
@@ -117,6 +117,7 @@ ikvm_native=yes
 
 host_win32=no
 target_win32=no
+target_wasm=no
 platform_android=no
 platform_tizen=no
 platform_ios=no
@@ -756,12 +757,14 @@ AC_ARG_WITH(mcs-path, [  --with-mcs-path=/path/to/mcs      Specify an alternate 
 
 AC_ARG_WITH(jumptables, [  --with-jumptables=yes,no      enable/disable support for jumptables (ARM-only for now) (defaults to no)],[],[with_jumptables=no])
 
-AC_ARG_WITH(core,       [  --with-core=yes,no,only       controls whether to build Mono as a .NET Core runtime, not build it, or just build core (defaults to no)],[],[with_core=no])
-if test x$with_core = xyes; then
+AC_ARG_WITH(core,       [  --with-core=only       controls whether to build Mono as a .NET Core runtime (defaults to no)],[],[with_core=no])
+if test x$with_core = xonly; then
     AC_DEFINE(ENABLE_NETCORE,1,[Enables the support for .NET Core Features in the MonoVM])
+    mono_feature_disable_remoting='yes'
+    mono_feature_disable_reflection_emit_save='yes'
+    mono_feature_disable_appdomains='yes'
 fi
-AM_CONDITIONAL(ENABLE_CORE, test x$with_core = xyes)
-AM_CONDITIONAL(ONLY_CORE, test x$with_core = xonly)
+AM_CONDITIONAL(ENABLE_NETCORE, test x$with_core = xonly)
 
 #
 # A sanity check to catch cases where the package was unpacked
@@ -1483,7 +1486,7 @@ fi
 AC_ARG_ENABLE(minimal, [  --enable-minimal=LIST      drop support for LIST subsystems.
      LIST is a comma-separated list from: aot, profiler, decimal, pinvoke, debug, appdomains, verifier, 
      reflection_emit, reflection_emit_save, large_code, logging, com, ssa, generics, attach, jit, interpreter, simd, soft_debug, perfcounters, normalization, desktop_loader, shared_perfcounters, remoting,
-	 security, lldb, mdb, assert_messages, sgen_marksweep_conc, sgen_split_nursery, sgen_gc_bridge, sgen_debug_helpers.],
+	 security, lldb, mdb, assert_messages, cleanup, sgen_marksweep_conc, sgen_split_nursery, sgen_gc_bridge, sgen_debug_helpers.],
 [
 	for feature in `echo "$enable_minimal" | sed -e "s/,/ /g"`; do
 		eval "mono_feature_disable_$feature='yes'"
@@ -1657,6 +1660,11 @@ fi
 if test "x$mono_feature_disable_assert_messages" = "xyes"; then
 	AC_DEFINE(DISABLE_ASSERT_MESSAGES, 1, [Disable assertion messages.])
 	AC_MSG_NOTICE([Disabled assertion messages.])
+fi
+
+if test "x$mono_feature_disable_cleanup" = "xyes"; then
+	AC_DEFINE(DISABLE_CLEANUP, 1, [Disable runtime cleanup.])
+	AC_MSG_NOTICE([Disabled runtime cleanup.])
 fi
 
 if test "x$mono_feature_disable_sgen_marksweep_conc" = "xyes"; then
@@ -3058,6 +3066,8 @@ if test x$host_win32 = xno; then
 		AC_MSG_RESULT(no)
 	])
 
+	AC_CHECK_HEADERS([linux/if_packet.h])
+
 	AC_MSG_CHECKING(for struct in_pktinfo)
 	AC_TRY_COMPILE([
 		#ifdef HAVE_LINUX_IN_H
@@ -3117,7 +3127,7 @@ if test x$host_win32 = xno; then
 	AC_CHECK_DECL(TIOCGWINSZ,        [AC_DEFINE(HAVE_TIOCGWINSZ, 1, [TIOCGWINSZ])], [], [[#include <sys/ioctl.h>]])
 	AC_CHECK_FUNC(tcgetattr,         [AC_DEFINE(HAVE_TCGETATTR, 1, [tcgetattr])])
 	AC_CHECK_FUNC(tcsetattr,         [AC_DEFINE(HAVE_TCSETATTR, 1, [tcsetattr])])
-	AC_CHECK_FUNC(arc4random,        [AC_DEFINE(HAVE_ARC4RANDOM, 1, [arc4random])])
+	AC_CHECK_FUNC(arc4random_buf,    [AC_DEFINE(HAVE_ARC4RANDOM_BUF, 1, [arc4random_buf])])
 	AC_CHECK_DECL(ECHO,              [AC_DEFINE(HAVE_ECHO, 1, [ECHO])], [], [[#include <termios.h>]])
 	AC_CHECK_DECL(ICANON,            [AC_DEFINE(HAVE_ICANON, 1, [ICANON])], [], [[#include <termios.h>]])
 	AC_CHECK_DECL(TCSANOW,           [AC_DEFINE(HAVE_TCSANOW, 1, [TCSANOW])], [], [[#include <termios.h>]])
@@ -3301,6 +3311,9 @@ if test x$host_win32 = xno; then
 	AC_MSG_CHECKING(for shm_open that works well enough with mmap)
 	if test "x$ac_cv_func_shm_open" = "xno" -o "x$ac_cv_func_shm_open_working_with_mmap" = "xno" ; then
 		AC_MSG_RESULT(no)
+	elif test "x$cross_compiling" = "xyes"; then
+		AC_MSG_RESULT(cross compiling, assuming yes)
+		AC_DEFINE(HAVE_SHM_OPEN_THAT_WORKS_WELL_ENOUGH_WITH_MMAP, 1, [shm_open that works well enough with mmap])
 	else
 		AC_TRY_RUN([
 			#include <sys/mman.h>
@@ -3975,6 +3988,7 @@ case "$host" in
 		BTLS_SUPPORTED=no
 		ACCESS_UNALIGNED="no"
 		with_tls=pthread
+		target_wasm=yes
 		;;
 	mips*)
 		TARGET=MIPS;
@@ -4167,6 +4181,14 @@ case "$host" in
 		arch_target=arm;
 		ACCESS_UNALIGNED="no"
 		CPPFLAGS="$CPPFLAGS -D__ARM_EABI__"
+		;;
+	aarch64-*darwin*ilp32)
+		TARGET=ARM64;
+		arch_target=arm64
+		AC_DEFINE(MONO_ARCH_ILP32, 1, [64 bit mode with 4 byte longs and pointers])
+		sizeof_register=8
+		# assuming no other target other than watchOS is using aarch64*darwin triple
+		TARGET_SYS=WATCHOS
 		;;
 	aarch64-*)
 		# https://lkml.org/lkml/2012/7/15/133
@@ -5652,6 +5674,11 @@ if test x$host_win32 = xyes; then
 else
   mono_cfg_dir=$mono_cfg_root/etc
 fi
+
+if test "x$platform_android" = "xyes"; then
+  mono_cfg_dir=
+fi
+
 AC_SUBST(mono_cfg_dir)
 
 AC_SUBST(CSC)
@@ -5821,7 +5848,7 @@ AC_CONFIG_COMMANDS([nolock-libtool], [sed -e 's/lock_old_archive_extraction=yes/
 AC_CONFIG_COMMANDS([clean-llvm], [rm -f llvm/llvm_config.mk])
 
 # Anything involving -Werror must be done late because autoconf depends on compiling with warnings to be success.
-if test x"$GCC" = xyes; then
+if test x"$GCC" = xyes && "x$with_jemalloc" != "xyes"; then
 
 	# incompatible-pointer-types requires gcc circa 5.x
 
@@ -6002,6 +6029,23 @@ elif test x$host_linux = xyes; then
 	AC_MSG_RESULT(linux)
 
 	MONO_NATIVE_PLATFORM_TYPE="MONO_NATIVE_PLATFORM_TYPE_LINUX"
+elif test x$target_wasm = xyes; then
+	mono_native_text="wasm"
+	MONO_NATIVE_CC=$CC
+	MONO_NATIVE_CXX=$CXX
+	# The system.native code uses _WASM_ to check for wasm
+	MONO_NATIVE_CPPFLAGS="$CPPFLAGS -D_WASM_"
+	MONO_NATIVE_CXXFLAGS=$CXXFLAGS
+	MONO_NATIVE_CFLAGS=$CFLAGS
+	MONO_NATIVE_LDFLAGS=$LDFLAGS
+
+	mono_native=yes
+	mono_native_compat=no
+	MONO_NATIVE_PLATFORM=linux
+	AC_MSG_CHECKING([Mono.Native support])
+	AC_MSG_RESULT(wasm)
+
+	MONO_NATIVE_PLATFORM_TYPE="MONO_NATIVE_PLATFORM_TYPE_LINUX"
 elif case $host_os in aix*|os400*) true;; *) false;; esac; then
 	mono_native_text="AIX"
 	MONO_NATIVE_CC=$CC
@@ -6018,6 +6062,22 @@ elif case $host_os in aix*|os400*) true;; *) false;; esac; then
 	AC_MSG_RESULT(aix)
 
 	MONO_NATIVE_PLATFORM_TYPE="MONO_NATIVE_PLATFORM_TYPE_AIX"
+elif test x$platform_android = xyes; then
+	mono_native_text="Android"
+	MONO_NATIVE_CC=$CC
+	MONO_NATIVE_CXX=$CXX
+	MONO_NATIVE_CPPFLAGS=$CPPFLAGS
+	MONO_NATIVE_CXXFLAGS=$CXXFLAGS
+	MONO_NATIVE_CFLAGS=$CFLAGS
+	MONO_NATIVE_LDFLAGS=$LDFLAGS
+
+	mono_native=yes
+	mono_native_compat=no
+	MONO_NATIVE_PLATFORM=android
+	AC_MSG_CHECKING([Mono.Native support])
+	AC_MSG_RESULT(Android)
+
+	MONO_NATIVE_PLATFORM_TYPE="MONO_NATIVE_PLATFORM_TYPE_ANDROID"
 else
 	mono_native=no
 	mono_native_text="no"
@@ -6051,6 +6111,7 @@ AM_CONDITIONAL(MONO_NATIVE_PLATFORM_MACOS, test x$MONO_NATIVE_PLATFORM = xmacos)
 AM_CONDITIONAL(MONO_NATIVE_PLATFORM_IOS, test x$MONO_NATIVE_PLATFORM = xios)
 AM_CONDITIONAL(MONO_NATIVE_PLATFORM_LINUX, test x$MONO_NATIVE_PLATFORM = xlinux)
 AM_CONDITIONAL(MONO_NATIVE_PLATFORM_AIX, test x$MONO_NATIVE_PLATFORM = xaix)
+AM_CONDITIONAL(MONO_NATIVE_PLATFORM_ANDROID, test x$MONO_NATIVE_PLATFORM = xandroid)
 
 MONO_NATIVE_PLATFORM_TYPE_COMPAT="$MONO_NATIVE_PLATFORM_TYPE | MONO_NATIVE_PLATFORM_TYPE_COMPAT"
 MONO_NATIVE_PLATFORM_TYPE_UNIFIED="$MONO_NATIVE_PLATFORM_TYPE | MONO_NATIVE_PLATFORM_TYPE_UNIFIED"
@@ -6096,6 +6157,7 @@ mono/tests/assembly-load-reference/Makefile
 mono/tests/tests-config
 mono/tests/gc-descriptors/Makefile
 mono/tests/testing_gac/Makefile
+mono/tests/llvmonly-mixed/Makefile
 mono/unit-tests/Makefile
 mono/benchmark/Makefile
 mono/mini/Makefile

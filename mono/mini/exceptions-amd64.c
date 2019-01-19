@@ -56,7 +56,7 @@ LPTOP_LEVEL_EXCEPTION_FILTER mono_old_win_toplevel_exception_filter;
 void *mono_win_vectored_exception_handle;
 
 #define W32_SEH_HANDLE_EX(_ex) \
-	if (_ex##_handler) _ex##_handler(0, ep, ctx)
+	if (_ex##_handler) _ex##_handler(er->ExceptionCode, &info, ctx)
 
 static LONG CALLBACK seh_unhandled_exception_filter(EXCEPTION_POINTERS* ep)
 {
@@ -135,12 +135,12 @@ static LONG CALLBACK seh_vectored_exception_handler(EXCEPTION_POINTERS* ep)
 	LONG res;
 	MonoJitTlsData *jit_tls = mono_tls_get_jit_tls ();
 	MonoDomain* domain = mono_domain_get ();
+	MonoWindowsSigHandlerInfo info = { TRUE, ep };
 
 	/* If the thread is not managed by the runtime return early */
 	if (!jit_tls)
 		return EXCEPTION_CONTINUE_SEARCH;
 
-	jit_tls->mono_win_chained_exception_needs_run = FALSE;
 	res = EXCEPTION_CONTINUE_EXECUTION;
 
 	er = ep->ExceptionRecord;
@@ -157,7 +157,7 @@ static LONG CALLBACK seh_vectored_exception_handler(EXCEPTION_POINTERS* ep)
 				ctx->Rip = (guint64)restore_stack;
 			}
 		} else {
-			jit_tls->mono_win_chained_exception_needs_run = TRUE;
+			info.handled = FALSE;
 		}
 		break;
 	case EXCEPTION_ACCESS_VIOLATION:
@@ -175,11 +175,11 @@ static LONG CALLBACK seh_vectored_exception_handler(EXCEPTION_POINTERS* ep)
 		W32_SEH_HANDLE_EX(fpe);
 		break;
 	default:
-		jit_tls->mono_win_chained_exception_needs_run = TRUE;
+		info.handled = FALSE;
 		break;
 	}
 
-	if (jit_tls->mono_win_chained_exception_needs_run) {
+	if (!info.handled) {
 		/* Don't copy context back if we chained exception
 		* as the handler may have modfied the EXCEPTION_POINTERS
 		* directly. We don't pass sigcontext to chained handlers.
@@ -959,7 +959,7 @@ mono_arch_exceptions_init (void)
 		mono_register_jit_icall (tramp, "llvm_throw_corlib_exception_abs_trampoline", NULL, TRUE);
 		tramp = mono_aot_get_trampoline ("llvm_resume_unwind_trampoline");
 		mono_register_jit_icall (tramp, "llvm_resume_unwind_trampoline", NULL, TRUE);
-	} else {
+	} else if (!mono_llvm_only) {
 		/* Call this to avoid initialization races */
 		tramps = mono_amd64_get_exception_trampolines (FALSE);
 		for (l = tramps; l; l = l->next) {

@@ -10,6 +10,7 @@
 #include "mini.h"
 #include "ir-emit.h"
 #include "mini-runtime.h"
+#include "llvmonly-runtime.h"
 #include "mini-llvm.h"
 #include "jit-icalls.h"
 #include <mono/metadata/abi-details.h>
@@ -390,6 +391,24 @@ callvirt_to_call (int opcode)
 	return -1;
 }
 
+static gboolean
+can_enter_interp (MonoCompile *cfg, MonoMethod *method)
+{
+	if (method->wrapper_type)
+		return FALSE;
+	if (m_class_get_image (method->klass) == m_class_get_image (cfg->method->klass))
+		return FALSE;
+
+	/* See needs_extra_arg () in mini-llvm.c */
+	if (method->string_ctor)
+		return FALSE;
+	if (method->klass == mono_get_string_class () && (strstr (method->name, "memcpy") || strstr (method->name, "bzero")))
+		return FALSE;
+
+	/* Assume all calls outside the assembly can enter the interpreter */
+	return TRUE;
+}
+
 MonoInst*
 mini_emit_method_call_full (MonoCompile *cfg, MonoMethod *method, MonoMethodSignature *sig, gboolean tailcall,
 							MonoInst **args, MonoInst *this_ins, MonoInst *imt_arg, MonoInst *rgctx_arg)
@@ -444,6 +463,13 @@ mini_emit_method_call_full (MonoCompile *cfg, MonoMethod *method, MonoMethodSign
 
 	if (cfg->llvm_only && virtual_ && (method->flags & METHOD_ATTRIBUTE_VIRTUAL))
 		return mini_emit_llvmonly_virtual_call (cfg, method, sig, 0, args);
+
+	if (cfg->llvm_only && cfg->interp && !virtual_ && !tailcall && can_enter_interp (cfg, method)) {
+		MonoInst *ftndesc = mini_emit_get_rgctx_method (cfg, -1, method, MONO_RGCTX_INFO_METHOD_FTNDESC);
+
+		/* This call might need to enter the interpreter so make it indirect */
+		return mini_emit_llvmonly_calli (cfg, sig, args, ftndesc);
+	}
 
 	need_unbox_trampoline = method->klass == mono_defaults.object_class || mono_class_is_interface (method->klass);
 
@@ -676,7 +702,7 @@ mini_emit_llvmonly_virtual_call (MonoCompile *cfg, MonoMethod *cmethod, MonoMeth
 		icall_args [0] = vtable_ins;
 		EMIT_NEW_ICONST (cfg, icall_args [1], slot);
 		/* Make the icall return the vtable slot value to save some code space */
-		ins = mono_emit_jit_icall (cfg, mono_init_vtable_slot, icall_args);
+		ins = mono_emit_jit_icall (cfg, mini_llvmonly_init_vtable_slot, icall_args);
 		ins->dreg = slot_reg;
 		MONO_EMIT_NEW_BRANCH_BLOCK (cfg, OP_BR, non_null_bb);
 
@@ -784,9 +810,9 @@ mini_emit_llvmonly_virtual_call (MonoCompile *cfg, MonoMethod *cmethod, MonoMeth
 		icall_args [2] = mini_emit_get_rgctx_method (cfg, context_used,
 													 cmethod, MONO_RGCTX_INFO_METHOD);
 		if (is_iface)
-			ftndesc_ins = mono_emit_jit_icall (cfg, mono_resolve_generic_virtual_iface_call, icall_args);
+			ftndesc_ins = mono_emit_jit_icall (cfg, mini_llvmonly_resolve_generic_virtual_iface_call, icall_args);
 		else
-			ftndesc_ins = mono_emit_jit_icall (cfg, mono_resolve_generic_virtual_call, icall_args);
+			ftndesc_ins = mono_emit_jit_icall (cfg, mini_llvmonly_resolve_generic_virtual_call, icall_args);
 		ftndesc_ins->dreg = ftndesc_reg;
 		MONO_EMIT_NEW_BRANCH_BLOCK (cfg, OP_BR, end_bb);
 
@@ -810,9 +836,9 @@ mini_emit_llvmonly_virtual_call (MonoCompile *cfg, MonoMethod *cmethod, MonoMeth
 
 	g_assert (is_gsharedvt);
 	if (is_iface)
-		call_target = mono_emit_jit_icall (cfg, mono_resolve_iface_call_gsharedvt, icall_args);
+		call_target = mono_emit_jit_icall (cfg, mini_llvmonly_resolve_iface_call_gsharedvt, icall_args);
 	else
-		call_target = mono_emit_jit_icall (cfg, mono_resolve_vcall_gsharedvt, icall_args);
+		call_target = mono_emit_jit_icall (cfg, mini_llvmonly_resolve_vcall_gsharedvt, icall_args);
 
 	/*
 	 * Pass the extra argument even if the callee doesn't receive it, most
@@ -883,5 +909,6 @@ mini_emit_llvmonly_calli (MonoCompile *cfg, MonoMethodSignature *fsig, MonoInst 
 
 	return mini_emit_extra_arg_calli (cfg, fsig, args, arg_reg, call_target);
 }
-
+#else
+MONO_EMPTY_SOURCE_FILE (calls);
 #endif

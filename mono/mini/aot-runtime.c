@@ -195,6 +195,9 @@ static MonoAotModule *container_amodule = NULL;
  */
 static GHashTable *ji_to_amodule;
 
+/* Maps method addresses to MonoAotMethodFlags */
+static GHashTable *code_to_method_flags;
+
 /*
  * Whenever to AOT compile loaded assemblies on demand and store them in
  * a cache.
@@ -1080,7 +1083,9 @@ decode_method_ref_with_target (MonoAotModule *module, MethodRef *ref, MonoMethod
 					return FALSE;
 				ref->method = mini_get_interp_in_wrapper (sig);
 			} else if (subtype == WRAPPER_SUBTYPE_INTERP_LMF) {
-				ref->method = mini_get_interp_lmf_wrapper ();
+				MonoJitICallInfo *info = mono_find_jit_icall_by_name ((char *) p);
+				g_assert (info);
+				ref->method = mini_get_interp_lmf_wrapper (info->name, (gpointer) info->func);
 			} else if (subtype == WRAPPER_SUBTYPE_GSHAREDVT_IN_SIG) {
 				MonoMethodSignature *sig = decode_signature (module, p, &p);
 				if (!sig)
@@ -1610,7 +1615,7 @@ aot_cache_load_module (MonoAssembly *assembly, char **aot_name)
 		return module;
 	}
 
-	if (!strcmp (assembly->aname.name, "mscorlib") && !mscorlib_aot_loaded)
+	if (mono_is_corlib_image (assembly->image) && !mscorlib_aot_loaded)
 		/*
 		 * Can't AOT this during startup, so we AOT it when called later from
 		 * mono_aot_get_method ().
@@ -2035,6 +2040,9 @@ load_aot_module (MonoAssembly *assembly, gpointer user_data)
 	if (mono_compile_aot)
 		return;
 
+	if (mono_aot_mode == MONO_AOT_MODE_NONE)
+		return;
+
 	if (assembly->image->aot_module)
 		/* 
 		 * Already loaded. This can happen because the assembly loading code might invoke
@@ -2099,6 +2107,7 @@ if (container_assm_name && !container_amodule) {
 			}
 			g_free (aot_name);
 		}
+#ifndef PLATFORM_ANDROID
 		if (!sofile) {
 			char *basename = g_path_get_basename (assembly->image->name);
 			aot_name = g_strdup_printf ("%s/mono/aot-cache/%s/%s%s", mono_assembly_getrootdir(), MONO_ARCHITECTURE, basename, MONO_SOLIB_EXT);
@@ -2110,6 +2119,7 @@ if (container_assm_name && !container_amodule) {
 			}
 			g_free (aot_name);
 		}
+#endif
 		if (!sofile) {
 			GList *l;
 
@@ -2308,7 +2318,7 @@ if (container_assm_name && !container_amodule) {
 	amodule->trampolines [MONO_AOT_TRAMP_FTNPTR_ARG] = (guint8 *)info->ftnptr_arg_trampolines;
 	amodule->trampolines [MONO_AOT_TRAMP_UNBOX_ARBITRARY] = (guint8 *)info->unbox_arbitrary_trampolines;
 
-	if (!strcmp (assembly->aname.name, "mscorlib"))
+	if (mono_is_corlib_image (assembly->image))
 		mscorlib_aot_module = amodule;
 
 	/* Compute method addresses */
@@ -4206,6 +4216,22 @@ load_method (MonoDomain *domain, MonoAotModule *amodule, MonoImage *image, MonoM
 		g_free (full_name);
 	}
 
+	if (mono_llvm_only) {
+		guint8 *info, *p;
+
+		info = &amodule->blob [mono_aot_get_offset (amodule->method_info_offsets, method_index)];
+		p = info;
+		guint8 flags = decode_value (p, &p);
+		/* The caller needs to looks this up, but its hard to do without constructing the full MonoJitInfo, so save it here */
+		if (flags & MONO_AOT_METHOD_FLAG_GSHAREDVT_VARIABLE) {
+			mono_aot_lock ();
+			if (!code_to_method_flags)
+				code_to_method_flags = g_hash_table_new (NULL, NULL);
+			g_hash_table_insert (code_to_method_flags, code, GUINT_TO_POINTER (flags));
+			mono_aot_unlock ();
+		}
+	}
+
 	amodule_lock (amodule);
 
 	init_plt (amodule);
@@ -4350,7 +4376,8 @@ mono_aot_can_dedup (MonoMethod *method)
 		WrapperInfo *info = mono_marshal_get_wrapper_info (method);
 
 		if (info->subtype == WRAPPER_SUBTYPE_PTR_TO_STRUCTURE ||
-			info->subtype == WRAPPER_SUBTYPE_STRUCTURE_TO_PTR)
+			info->subtype == WRAPPER_SUBTYPE_STRUCTURE_TO_PTR ||
+			info->subtype == WRAPPER_SUBTYPE_INTERP_LMF)
 			return FALSE;
 		return TRUE;
 	}
@@ -4459,8 +4486,8 @@ init_method (MonoAotModule *amodule, guint32 method_index, MonoMethod *method, M
 
 	p = info;
 
-	//does the method's class has a cctor?
-	if (decode_value (p, &p) == 1)
+	guint8 flags = decode_value (p, &p);
+	if (flags & MONO_AOT_METHOD_FLAG_HAS_CCTOR)
 		klass_to_run_ctor = decode_klass_ref (amodule, p, &p, error);
 	if (!is_ok (error))
 		return FALSE;
@@ -4684,7 +4711,7 @@ mono_aot_get_method (MonoDomain *domain, MonoMethod *method, MonoError *error)
 		/* Non shared AOT code can't be used in other appdomains */
 		return NULL;
 
-	if (enable_aot_cache && !amodule && domain->entry_assembly && m_class_get_image (klass) == mono_defaults.corlib) {
+	if (enable_aot_cache && !amodule && domain->entry_assembly && mono_is_corlib_image (m_class_get_image (klass))) {
 		/* This cannot be AOTed during startup, so do it now */
 		if (!mscorlib_aot_loaded) {
 			mscorlib_aot_loaded = TRUE;
@@ -5760,7 +5787,7 @@ get_numerous_trampoline (MonoAotTrampoline tramp_type, int n_got_slots, MonoAotM
 #endif
 	if (amodule->trampoline_index [tramp_type] == amodule->info.num_trampolines [tramp_type]) {
 		g_error ("Ran out of trampolines of type %d in '%s' (limit %d)%s\n", 
-				 tramp_type, image ? image->name : "mscorlib", amodule->info.num_trampolines [tramp_type], MONOTOUCH_TRAMPOLINES_ERROR);
+				 tramp_type, image ? image->name : MONO_ASSEMBLY_CORLIB_NAME, amodule->info.num_trampolines [tramp_type], MONOTOUCH_TRAMPOLINES_ERROR);
 	}
 	index = amodule->trampoline_index [tramp_type] ++;
 
@@ -6226,6 +6253,20 @@ mono_aot_handle_pagefault (void *ptr)
 #endif
 }
 
+MonoAotMethodFlags
+mono_aot_get_method_flags (guint8 *code)
+{
+	guint32 flags;
+
+	if (!code_to_method_flags)
+		return MONO_AOT_METHOD_FLAG_NONE;
+	mono_aot_lock ();
+	/* Not found and no FLAG_NONE are the same, but its not a problem */
+	flags = GPOINTER_TO_UINT (g_hash_table_lookup (code_to_method_flags, code));
+	mono_aot_unlock ();
+	return (MonoAotMethodFlags)flags;
+}
+
 #else
 /* AOT disabled */
 
@@ -6442,6 +6483,12 @@ GHashTable *
 mono_aot_get_weak_field_indexes (MonoImage *image)
 {
 	return NULL;
+}
+
+MonoAotMethodFlags
+mono_aot_get_method_flags (guint8 *code)
+{
+	return MONO_AOT_METHOD_FLAG_NONE;
 }
 
 #endif

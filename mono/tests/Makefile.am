@@ -1,6 +1,6 @@
 include $(top_srcdir)/mk/common.mk
 
-SUBDIRS = gc-descriptors . testing_gac assembly-load-reference
+SUBDIRS = gc-descriptors . testing_gac assembly-load-reference llvmonly-mixed
 
 check-local:
 	ok=:; \
@@ -1576,7 +1576,6 @@ PROFILE_DISABLED_TESTS += \
 	bug-80307.exe
 
 PROFILE_DISABLED_TESTS += \
-	bug-70561.exe \
 	transparentproxy.exe
 endif
 

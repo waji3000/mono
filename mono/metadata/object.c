@@ -4898,9 +4898,13 @@ mono_unhandled_exception_checked (MonoObjectHandle exc, MonoError *error)
 	 * a thread started in unmanaged world.
 	 * https://msdn.microsoft.com/en-us/library/system.appdomainunloadedexception(v=vs.110).aspx#Anchor_6
 	 */
-	if (klass == mono_defaults.threadabortexception_class ||
+	gboolean no_event = (klass == mono_defaults.threadabortexception_class);
+#ifndef ENABLE_NETCORE
+	no_event = no_event ||
 			(klass == mono_class_get_appdomain_unloaded_exception_class () &&
-			mono_thread_info_current ()->runtime_thread))
+			mono_thread_info_current ()->runtime_thread);
+#endif
+	if (no_event)
 		return;
 
 	field = mono_class_get_field_from_name_full (mono_defaults.appdomain_class, "UnhandledException", NULL);
@@ -4953,13 +4957,13 @@ mono_unhandled_exception_checked (MonoObjectHandle exc, MonoError *error)
  */
 void
 mono_runtime_exec_managed_code (MonoDomain *domain,
-				MonoMainThreadFunc main_func,
-				gpointer main_args)
+				MonoMainThreadFunc mfunc,
+				gpointer margs)
 {
 	// This function is external_only.
 
 	ERROR_DECL (error);
-	mono_thread_create_checked (domain, main_func, main_args, error);
+	mono_thread_create_checked (domain, mfunc, margs, error);
 	mono_error_assert_ok (error);
 
 	mono_thread_manage ();
@@ -7542,14 +7546,15 @@ mono_string_to_utf8 (MonoString *s)
 }
 
 /**
- * mono_utf16_to_utf8:
+ * mono_utf16_to_utf8len:
  */
 char *
-mono_utf16_to_utf8 (const gunichar2 *s, gsize slength, MonoError *error)
+mono_utf16_to_utf8len (const gunichar2 *s, gsize slength, gsize *utf8_length, MonoError *error)
 {
 	MONO_REQ_GC_UNSAFE_MODE;
 
 	long written = 0;
+	*utf8_length = 0;
 	char *as;
 	GError *gerror = NULL;
 
@@ -7562,6 +7567,7 @@ mono_utf16_to_utf8 (const gunichar2 *s, gsize slength, MonoError *error)
 		return g_strdup ("");
 
 	as = g_utf16_to_utf8 (s, slength, NULL, &written, &gerror);
+	*utf8_length = written;
 	if (gerror) {
 		mono_error_set_argument (error, "string", gerror->message);
 		g_error_free (gerror);
@@ -7574,9 +7580,20 @@ mono_utf16_to_utf8 (const gunichar2 *s, gsize slength, MonoError *error)
 		memcpy (as2, as, written);
 		g_free (as);
 		as = as2;
+
+		// FIXME utf8_length is ambiguous here.
+		// For now it is what strlen would report.
+		// A lot of code does not deal correctly with embedded nuls.
 	}
 
 	return as;
+}
+
+char *
+mono_utf16_to_utf8 (const gunichar2 *s, gsize slength, MonoError *error)
+{
+	gsize utf8_length = 0;
+	return mono_utf16_to_utf8len (s, slength, &utf8_length, error);
 }
 
 char *
@@ -8435,7 +8452,6 @@ mono_delegate_ctor_with_method (MonoObjectHandle this_obj, MonoObjectHandle targ
 	MonoDelegateHandle delegate = MONO_HANDLE_CAST (MonoDelegate, this_obj);
 
 	g_assert (!MONO_HANDLE_IS_NULL (this_obj));
-	g_assert (addr);
 
 	MonoClass *klass = mono_handle_class (this_obj);
 	g_assert (mono_class_has_parent (klass, mono_defaults.multicastdelegate_class));
@@ -8445,10 +8461,13 @@ mono_delegate_ctor_with_method (MonoObjectHandle this_obj, MonoObjectHandle targ
 
 	UnlockedIncrement (&mono_stats.delegate_creations);
 
+	if (addr)
+		MONO_HANDLE_SETVAL (delegate, method_ptr, gpointer, addr);
+
 #ifndef DISABLE_REMOTING
 	if (!MONO_HANDLE_IS_NULL (target) && mono_class_is_transparent_proxy (mono_handle_class (target))) {
 		if (callbacks.interp_get_remoting_invoke) {
-			MONO_HANDLE_SETVAL (delegate, interp_method, gpointer, callbacks.interp_get_remoting_invoke (addr, error));
+			MONO_HANDLE_SETVAL (delegate, interp_method, gpointer, callbacks.interp_get_remoting_invoke (method, addr, error));
 		} else {
 			g_assert (method);
 			method = mono_marshal_get_remoting_invoke (method, error);
@@ -8456,17 +8475,14 @@ mono_delegate_ctor_with_method (MonoObjectHandle this_obj, MonoObjectHandle targ
 			MONO_HANDLE_SETVAL (delegate, method_ptr, gpointer, mono_compile_method_checked (method, error));
 		}
 		return_val_if_nok (error, FALSE);
-		MONO_HANDLE_SET (delegate, target, target);
-	} else
-#endif
-	{
-		MONO_HANDLE_SETVAL (delegate, method_ptr, gpointer, addr);
-		MONO_HANDLE_SET (delegate, target, target);
 	}
+#endif
 
+	MONO_HANDLE_SET (delegate, target, target);
 	MONO_HANDLE_SETVAL (delegate, invoke_impl, gpointer, callbacks.create_delegate_trampoline (MONO_HANDLE_DOMAIN (delegate), mono_handle_class (delegate)));
-	if (callbacks.init_delegate)
-		callbacks.init_delegate (MONO_HANDLE_RAW (delegate)); /* FIXME: update init_delegate callback to take a MonoDelegateHandle */
+	g_assert (callbacks.init_delegate);
+	callbacks.init_delegate (delegate, error);
+	return_val_if_nok (error, FALSE);
 	return TRUE;
 }
 
